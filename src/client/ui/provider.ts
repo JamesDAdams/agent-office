@@ -1,11 +1,15 @@
 import './provider.css';
 import type { AgentChoice, AgentEffort, AgentProvider, ProjectInfo, Usage, WorkerInfo } from '../../shared/protocol';
 import { AGENT_EFFORTS, isAgentEffort } from '../../shared/protocol';
-import { AGENT_PROVIDERS, CLAUDE_MODEL_NAMES, PROVIDER_META, claudeModelName, isAgentProvider, isClaudeModel, takesEffort, type ModelOption } from '../../shared/providers';
+import { AGENT_PROVIDERS, CLAUDE_MODEL_NAMES, PROVIDER_META, claudeModelName, isAgentProvider, isClaudeModel, takesEffort, type ModelOption, getAllProviders } from '../../shared/providers';
 import { store } from '../state';
 import { h } from './dom';
 
-export const PROVIDER_LABEL = Object.fromEntries(AGENT_PROVIDERS.map((p) => [p, PROVIDER_META[p].label])) as Record<AgentProvider, string>;
+export function getProviderLabel(provider: string): string {
+  return PROVIDER_META[provider]?.label ?? provider;
+}
+
+export const PROVIDER_LABEL: Record<string, string> = Object.fromEntries(getAllProviders().map((p) => [p, PROVIDER_META[p].label]));
 
 export const EFFORT_LABEL: Record<AgentEffort, string> = {
   low: 'Low',

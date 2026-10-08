@@ -183,7 +183,7 @@ export interface ProviderMeta {
   };
 }
 
-export const PROVIDER_META: Record<AgentProvider, ProviderMeta> = {
+export const PROVIDER_META: Record<string, ProviderMeta> = {
   claude: {
     label: 'Claude Code',
     name: 'Claude Code',
@@ -357,4 +357,27 @@ export function savedEffort(provider: unknown, effort: unknown): AgentEffort | u
 export function providerNames(has: (meta: ProviderMeta) => boolean): string {
   const names = AGENT_PROVIDERS.map((p) => PROVIDER_META[p]).filter(has).map((m) => m.name);
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}` : names.join('');
+}
+
+const pluginProviders: string[] = [];
+
+export function registerAgentProvider(id: string, meta: ProviderMeta): void {
+  if (PROVIDER_META[id]) return;
+  PROVIDER_META[id] = meta;
+  pluginProviders.push(id);
+}
+
+export function unregisterAgentProvider(id: string): void {
+  if (!pluginProviders.includes(id)) return;
+  delete PROVIDER_META[id];
+  const idx = pluginProviders.indexOf(id);
+  if (idx >= 0) pluginProviders.splice(idx, 1);
+}
+
+export function getPluginProviders(): string[] {
+  return [...pluginProviders];
+}
+
+export function getAllProviders(): string[] {
+  return [...AGENT_PROVIDERS, ...pluginProviders];
 }

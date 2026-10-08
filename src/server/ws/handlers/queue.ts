@@ -5,7 +5,10 @@ import { num, str } from '../../office/input.js';
 import { here } from './common.js';
 import type { HandlerMap, ViewPieces } from './types.js';
 
-export const queueView: ViewPieces['queue'] = (_ctx, floor) => floor?.queue.state() ?? { tasks: [], maxWorkers: 0 };
+export const queueView: ViewPieces['queue'] = (_ctx, floor) => {
+  if (floor) void floor.queue.syncFromAdapter();
+  return floor?.queue.state() ?? { tasks: [], maxWorkers: 0 };
+};
 
 export const queueHandlers = {
   'queue.add'(ctx, c, msg) {
@@ -28,14 +31,14 @@ export const queueHandlers = {
   },
   'queue.remove'(ctx, c, msg) {
     const floor = here(ctx, c);
-    if (floor) ctx.warn(c, floor.queue.remove(str(msg.taskId, 32)));
+    if (floor) ctx.warn(c, floor.queue.remove(str(msg.taskId, 128)));
   },
   'queue.move'(ctx, c, msg) {
-    ctx.floorOf(c)?.queue.move(str(msg.taskId, 32), num(msg.delta) < 0 ? -1 : 1);
+    ctx.floorOf(c)?.queue.move(str(msg.taskId, 128), num(msg.delta) < 0 ? -1 : 1);
   },
   'queue.retry'(ctx, c, msg) {
     const floor = here(ctx, c);
-    if (floor) ctx.warn(c, floor.queue.retry(str(msg.taskId, 32)));
+    if (floor) ctx.warn(c, floor.queue.retry(str(msg.taskId, 128)));
   },
   'queue.clear'(ctx, c) {
     ctx.floorOf(c)?.queue.clear();

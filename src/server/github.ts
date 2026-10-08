@@ -148,6 +148,8 @@ export class GitHub {
     private dir: string,
     private onIssues: (s: GhState<GhIssue>) => void,
     private onPulls: (s: GhState<GhPull>) => void,
+    private customIssues?: () => Promise<GhIssue[] | null>,
+    private customPulls?: () => Promise<GhPull[] | null>,
   ) {}
 
   start() {
@@ -186,6 +188,27 @@ export class GitHub {
    * GitHub login of whoever asked, when they're signed in to their own; else it's the office's.
    */
   async pullDetail(n: number, me?: string): Promise<GhPullDetail> {
+    const existing = this.pulls.items.find((it) => it.number === n);
+    if (existing && this.customPulls) {
+      return {
+        number: existing.number,
+        body: existing.body,
+        state: existing.state,
+        isDraft: existing.isDraft,
+        reviewDecision: existing.reviewDecision,
+        headRefName: existing.headRefName,
+        baseRefName: existing.baseRefName,
+        mergeable: 'UNKNOWN',
+        mergeStateStatus: 'UNKNOWN',
+        commits: 1,
+        comments: [],
+        reviews: [],
+        reviewComments: [],
+        checks: existing.checks !== 'none' ? [{ name: 'CI', state: existing.checks === 'pass' ? 'pass' : existing.checks === 'fail' ? 'fail' : 'pending' }] : [],
+        repo: { nameWithOwner: existing.headRefName || 'project', methods: ['squash', 'merge', 'rebase'] },
+        viewer: me ?? '',
+      };
+    }
     const fields = 'number,body,state,isDraft,reviewDecision,headRefName,baseRefName,mergeable,mergeStateStatus,commits,comments,reviews,statusCheckRollup';
     const jq = '.[] | {id, in_reply_to_id, path, line, side, body, user: .user.login, created_at, html_url}';
     const [view, lines, repo, viewer] = await Promise.all([
@@ -233,13 +256,25 @@ export class GitHub {
 
   /** The PR's unified diff, as `git diff` prints it. */
   pullDiff(n: number): Promise<string> {
+    if (this.customPulls) return Promise.resolve('');
     return gh(['pr', 'diff', String(n), '--color', 'never'], this.dir, 60_000);
   }
 
   async issueDetail(n: number, me?: string): Promise<GhIssueDetail> {
-    const [view, viewer] = await Promise.all([gh(['issue', 'view', String(n), '--json', 'number,state,body,comments'], this.dir), me ?? this.viewer()]);
-    const i = JSON.parse(view);
-    return { number: i.number, state: i.state, body: String(i.body ?? ''), comments: commentsOf(i.comments), viewer };
+    const existing = this.issues.items.find((it) => it.number === n);
+    if (existing && this.customIssues) {
+      return { number: existing.number, state: existing.state, body: existing.body, comments: [], viewer: me ?? '' };
+    }
+    try {
+      const [view, viewer] = await Promise.all([gh(['issue', 'view', String(n), '--json', 'number,state,body,comments'], this.dir), me ?? this.viewer()]);
+      const i = JSON.parse(view);
+      return { number: i.number, state: i.state, body: String(i.body ?? ''), comments: commentsOf(i.comments), viewer };
+    } catch (err) {
+      if (existing) {
+        return { number: existing.number, state: existing.state, body: existing.body, comments: [], viewer: me ?? '' };
+      }
+      throw err;
+    }
   }
 
   /**
@@ -422,25 +457,31 @@ export class GitHub {
     this.onIssues(this.issues);
     const asked = Date.now();
     try {
-      // Open and closed separately, so old open issues are never crowded out by recent closed ones.
-      const fields = 'number,title,state,url,author,labels,assignees,createdAt,updatedAt,body,comments';
-      const [open, closed] = await Promise.all([
-        gh(['issue', 'list', '--state', 'open', '--limit', '300', '--json', fields], this.dir),
-        gh(['issue', 'list', '--state', 'closed', '--limit', '40', '--json', fields], this.dir),
-      ]);
-      const fetched: GhIssue[] = [...JSON.parse(open), ...JSON.parse(closed)].map((i: any) => ({
-        number: i.number,
-        title: i.title,
-        state: i.state,
-        url: i.url,
-        author: i.author?.login ?? '',
-        labels: labels(i.labels),
-        assignees: (i.assignees ?? []).map((a: any) => a.login),
-        createdAt: i.createdAt,
-        updatedAt: i.updatedAt,
-        body: String(i.body ?? '').slice(0, 4000),
-        comments: Array.isArray(i.comments) ? i.comments.length : Number(i.comments ?? 0),
-      }));
+      let fetched: GhIssue[] | null = null;
+      if (this.customIssues) {
+        fetched = await this.customIssues();
+      }
+      if (fetched === null) {
+        // Open and closed separately, so old open issues are never crowded out by recent closed ones.
+        const fields = 'number,title,state,url,author,labels,assignees,createdAt,updatedAt,body,comments';
+        const [open, closed] = await Promise.all([
+          gh(['issue', 'list', '--state', 'open', '--limit', '300', '--json', fields], this.dir),
+          gh(['issue', 'list', '--state', 'closed', '--limit', '40', '--json', fields], this.dir),
+        ]);
+        fetched = [...JSON.parse(open), ...JSON.parse(closed)].map((i: any) => ({
+          number: i.number,
+          title: i.title,
+          state: i.state,
+          url: i.url,
+          author: i.author?.login ?? '',
+          labels: labels(i.labels),
+          assignees: (i.assignees ?? []).map((a: any) => a.login),
+          createdAt: i.createdAt,
+          updatedAt: i.updatedAt,
+          body: String(i.body ?? '').slice(0, 4000),
+          comments: Array.isArray(i.comments) ? i.comments.length : Number(i.comments ?? 0),
+        }));
+      }
       const items = this.claims.mark(this.relabel('issue', fetched, asked), asked);
       this.issues = { items, fetchedAt: Date.now(), loading: false };
     } catch (err) {
@@ -455,35 +496,41 @@ export class GitHub {
     this.onPulls(this.pulls);
     const asked = Date.now();
     try {
-      const fields = 'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,headRefOid,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';
-      const [open, merged, closed] = await Promise.all([
-        gh(['pr', 'list', '--state', 'open', '--limit', '150', '--json', fields], this.dir),
-        gh(['pr', 'list', '--state', 'merged', '--limit', '30', '--json', fields], this.dir),
-        gh(['pr', 'list', '--state', 'closed', '--limit', '40', '--json', fields], this.dir),
-      ]);
-      // `--state closed` includes merged PRs; keep only the ones closed without merging.
-      const seen = new Set<number>();
-      const all = [...JSON.parse(open), ...JSON.parse(merged), ...JSON.parse(closed)].filter((p: any) => !seen.has(p.number) && seen.add(p.number));
-      const fetched: GhPull[] = all.map((p: any) => ({
-        number: p.number,
-        title: p.title,
-        state: p.state,
-        isDraft: !!p.isDraft,
-        url: p.url,
-        author: p.author?.login ?? '',
-        labels: labels(p.labels),
-        reviewDecision: p.reviewDecision ?? '',
-        headRefName: p.headRefName,
-        headRefOid: typeof p.headRefOid === 'string' ? p.headRefOid : undefined,
-        baseRefName: p.baseRefName,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
-        additions: p.additions ?? 0,
-        deletions: p.deletions ?? 0,
-        checks: checksOf(p.statusCheckRollup),
-        body: String(p.body ?? '').slice(0, 4000),
-        closes: (p.closingIssuesReferences ?? []).map((r: any) => Number(r.number)).filter((n: number) => Number.isInteger(n) && n > 0),
-      }));
+      let fetched: GhPull[] | null = null;
+      if (this.customPulls) {
+        fetched = await this.customPulls();
+      }
+      if (fetched === null) {
+        const fields = 'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,headRefOid,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';
+        const [open, merged, closed] = await Promise.all([
+          gh(['pr', 'list', '--state', 'open', '--limit', '150', '--json', fields], this.dir),
+          gh(['pr', 'list', '--state', 'merged', '--limit', '30', '--json', fields], this.dir),
+          gh(['pr', 'list', '--state', 'closed', '--limit', '40', '--json', fields], this.dir),
+        ]);
+        // `--state closed` includes merged PRs; keep only the ones closed without merging.
+        const seen = new Set<number>();
+        const all = [...JSON.parse(open), ...JSON.parse(merged), ...JSON.parse(closed)].filter((p: any) => !seen.has(p.number) && seen.add(p.number));
+        fetched = all.map((p: any) => ({
+          number: p.number,
+          title: p.title,
+          state: p.state,
+          isDraft: !!p.isDraft,
+          url: p.url,
+          author: p.author?.login ?? '',
+          labels: labels(p.labels),
+          reviewDecision: p.reviewDecision ?? '',
+          headRefName: p.headRefName,
+          headRefOid: typeof p.headRefOid === 'string' ? p.headRefOid : undefined,
+          baseRefName: p.baseRefName,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+          additions: p.additions ?? 0,
+          deletions: p.deletions ?? 0,
+          checks: checksOf(p.statusCheckRollup),
+          body: String(p.body ?? '').slice(0, 4000),
+          closes: (p.closingIssuesReferences ?? []).map((r: any) => Number(r.number)).filter((n: number) => Number.isInteger(n) && n > 0),
+        }));
+      }
       const items = this.relabel('pull', fetched, asked);
       this.pulls = { items, fetchedAt: Date.now(), loading: false };
     } catch (err) {

@@ -15,6 +15,7 @@ import { Changes } from './changes.js';
 import { Decor } from './decor.js';
 import { FloorPlanStore } from './floorplan.js';
 import { Docs } from './docs.js';
+import type { IssuesAdapter, PullsAdapter, QueueAdapter } from './plugins/types.js';
 import { Dog } from './dog.js';
 import { Court } from './court.js';
 import { Jail } from './jail.js';
@@ -32,6 +33,9 @@ type ToastLevel = 'info' | 'warn' | 'error';
 
 /** What a floor needs from the building around it. */
 export interface FloorContext {
+  issuesAdapter?: IssuesAdapter | (() => IssuesAdapter | null | undefined);
+  pullsAdapter?: PullsAdapter | (() => PullsAdapter | null | undefined);
+  queueAdapter?: QueueAdapter | (() => QueueAdapter | null | undefined);
   agentCmd: string;
   agentArgs: string[];
   /** The DSH profile DeepSeek Harness workers boot (see server/dsh.ts). */
@@ -85,7 +89,7 @@ const IDLE_REFRESH_MS = 10 * 60_000;
 const REFRESH_MS = 90_000;
 
 /** What `git` says about a checkout: its name, branch and origin for the top bar. */
-export function projectInfo(dir: string, name: string, agentCmd: string, agentArgs: string[]): ProjectInfo {
+export function projectInfo(dir: string, name: string, agentCmd: string, agentArgs: string[], externalId?: string, url?: string): ProjectInfo {
   const git = (args: string[]) => {
     try {
       return execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -96,6 +100,8 @@ export function projectInfo(dir: string, name: string, agentCmd: string, agentAr
   return {
     name,
     dir,
+    ...(externalId ? { externalId } : {}),
+    ...(url ? { url } : {}),
     branch: git(['rev-parse', '--abbrev-ref', 'HEAD']),
     remote: git(['remote', 'get-url', 'origin']),
     agentCmd: [agentCmd, ...agentArgs].join(' '),
@@ -152,7 +158,7 @@ export class Floor {
     const dataDir = path.join(def.dir, '.agent-office');
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     excludeFromGit(def.dir);
-    this.project = projectInfo(def.dir, def.name, ctx.agentCmd, ctx.agentArgs);
+    this.project = projectInfo(def.dir, def.name, ctx.agentCmd, ctx.agentArgs, def.externalId, def.url);
     this.docs = new Docs(def.dir);
     // Before the workers and the dog: the back office's desks are only there once it's built.
     this.plan = new FloorPlanStore(dataDir);
@@ -223,8 +229,17 @@ export class Floor {
         this.sendLandedHome();
         ctx.pullsChanged(this);
       },
+      async () => {
+        const a = typeof ctx.issuesAdapter === 'function' ? ctx.issuesAdapter() : ctx.issuesAdapter;
+        return a ? await a.listIssues(this) : null;
+      },
+      async () => {
+        const a = typeof ctx.pullsAdapter === 'function' ? ctx.pullsAdapter() : ctx.pullsAdapter;
+        return a ? await a.listPulls(this) : null;
+      },
     );
     // The 📋 task queue seats workers by itself: it watches the workers and links PRs from GitHub.
+    const queueAdapter = typeof ctx.queueAdapter === 'function' ? ctx.queueAdapter() : ctx.queueAdapter;
     this.queue = new TaskQueue(dataDir, this.workers, !!this.project.branch, {
       update: (state) => {
         ctx.emit(this, { t: 'queue', state });
@@ -244,7 +259,7 @@ export class Floor {
         ctx.emit(this, { t: 'gong', why: 'queue' });
       },
       worktreeNote: () => officePrompt(ctx.prompts, 'queue.worktree'),
-    });
+    }, queueAdapter ? { adapter: queueAdapter, floor: this } : undefined);
 
     // Meetings seat their own workers round the meeting room's table and run them round by round.
     const workers = this.workers;
@@ -400,6 +415,8 @@ export class Floor {
       palette: this.def.palette,
       addedBy: this.def.addedBy,
       addedAt: this.def.addedAt,
+      externalId: this.def.externalId,
+      url: this.def.url,
       workers: ws.filter((w) => !DESK_BY_ID.get(w.deskId)?.station).length,
       busy: ws.filter((w) => w.status === 'working').length,
       waiting: ws.filter((w) => w.kind === 'agent' && (w.status === 'needs_input' || (w.status === 'done' && !w.acked))).length,
