@@ -6,6 +6,8 @@ import { FLOOR_PALETTES, MAX_FLOORS, normalizeRepo, sameRepo } from '../shared/f
 import type { CloneProgress, ProjectsDirState, RepoChoice } from '../shared/protocol.js';
 import { CloneRun, dropLog, whyCloneFailed, type CloneEnd, type CloneRunOptions } from './clone.js';
 import { gh } from './github.js';
+import { loadFloors, saveFloors } from './building-store.js';
+import { mergeFloors } from './plugin-floors.js';
 
 /** A floor as floors.json keeps it. */
 export interface FloorDef {
@@ -98,7 +100,7 @@ export class Building {
     this.pickedFile = path.join(dataDir, 'projects-folder.json');
     this.localFile = path.join(dataDir, 'local-floor.json');
     this.maxFloorsFile = path.join(dataDir, 'max-floors.json');
-    this.load();
+    this.defs.push(...loadFloors(this.file));
     this.loadPicked();
     this.loadLocalOff();
     this.loadMaxFloors();
@@ -159,6 +161,17 @@ export class Building {
 
   list(): FloorDef[] {
     return this.defs;
+  }
+
+  /**
+   * Merges the floors a plugin provides into the building (see plugin-floors.ts): its own arrive, the
+   * ones it has dropped go, and everything the office and its people added stays where it is.
+   */
+  mergeList(defs: FloorDef[]) {
+    const next = mergeFloors(this.defs, defs);
+    if (JSON.stringify(this.defs) === JSON.stringify(next)) return;
+    this.defs = next;
+    this.save();
   }
 
   setList(defs: FloorDef[]) {
@@ -443,29 +456,6 @@ export class Building {
     return { id, name, repo, dir, palette, addedBy: by, addedAt: Date.now() };
   }
 
-  private load() {
-    if (!existsSync(this.file)) return;
-    try {
-      const saved = JSON.parse(readFileSync(this.file, 'utf8')) as Partial<FloorDef>[];
-      const ids = new Set<string>();
-      for (const s of Array.isArray(saved) ? saved : []) {
-        if (typeof s.id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(s.id) || ids.has(s.id) || typeof s.dir !== 'string' || !path.isAbsolute(s.dir)) continue;
-        ids.add(s.id);
-        this.defs.push({
-          id: s.id,
-          name: typeof s.name === 'string' && s.name ? s.name.slice(0, 100) : path.basename(s.dir),
-          repo: normalizeRepo(s.repo),
-          dir: s.dir,
-          palette: Number.isInteger(s.palette) && (s.palette as number) >= 0 ? (s.palette as number) : 0,
-          addedBy: typeof s.addedBy === 'string' ? s.addedBy : '?',
-          addedAt: typeof s.addedAt === 'number' ? s.addedAt : Date.now(),
-        });
-      }
-    } catch (err) {
-      console.error(`agent-office: ${this.file} couldn't be read, so the building starts empty: ${(err as Error).message}`);
-    }
-  }
-
   private loadPicked() {
     try {
       const saved = JSON.parse(readFileSync(this.pickedFile, 'utf8')) as Partial<PickedDir>;
@@ -497,11 +487,7 @@ export class Building {
   }
 
   private save() {
-    try {
-      writeFileSync(this.file, JSON.stringify(this.defs, null, 2), { mode: 0o600 });
-    } catch (err) {
-      console.error(`agent-office: couldn't save the floors: ${(err as Error).message}`);
-    }
+    saveFloors(this.file, this.defs);
   }
 
   private loadClones(): SavedClone[] {

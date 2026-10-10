@@ -91,7 +91,7 @@ export interface LateServices {
   services: Services;
   images: ImageProxy;
   upgrader: Upgrader;
-  /** A floor's Services board: its own workers' servers. */
+  /** A floor's Services board: its own workers' servers, and any rows a plugin's services provider has for it. */
   servicesState(floor: Floor | undefined, items?: ServiceInfo[]): ServicesState;
 }
 

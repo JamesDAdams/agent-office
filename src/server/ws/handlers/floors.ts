@@ -60,7 +60,7 @@ export const floorHandlers = {
           ctx.building.unremove(res.dir || res.name);
           ctx.building.unremove(repo);
           const defs = await floorProvider.listFloors();
-          ctx.building.setList(defs);
+          ctx.building.mergeList(defs);
           for (const d of defs) ctx.openFloor(d);
           ctx.floorsChanged();
           const floor = ctx.floors.get(res.name) || [...ctx.floors.values()].find((f) => f.def.name === res.name);

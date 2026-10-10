@@ -12,6 +12,15 @@ export function isAgentProvider(value: unknown): value is AgentProvider {
   return (AGENT_PROVIDERS as readonly unknown[]).includes(value);
 }
 
+/**
+ * Whether `value` names a provider the office can run: one of the built-in ones, or one a plugin has
+ * registered (see registerAgentProvider). The wire and saved state can hold anything, so anything
+ * that isn't one of these is a provider the office no longer knows.
+ */
+export function isKnownProvider(value: unknown): value is AgentProvider {
+  return typeof value === 'string' && (isAgentProvider(value) || pluginProviders.includes(value));
+}
+
 /** A Claude model alias the hire dialog and queue can request explicitly (see server/agents.ts). */
 export type ClaudeModel = 'fable' | 'opus' | 'sonnet' | 'haiku';
 export const CLAUDE_MODELS: readonly ClaudeModel[] = ['fable', 'opus', 'sonnet', 'haiku'];
@@ -156,6 +165,10 @@ export interface ProviderMeta {
   name: string;
   /** The executable it runs as: an office started with `--agent <bin>` runs it (see server/agents.ts). None for a custom --agent. */
   bin?: string;
+  /** Alternate executable names or script basenames that also identify this provider. */
+  bins?: readonly string[];
+  /** Custom matcher for an arbitrary `--agent` command path or invocation. */
+  matchesCommand?: (command: string) => boolean;
   /** Takes a model picked for each worker: which ids (they end up on its command line, so they're checked). */
   validModel?: (value: unknown) => value is string;
   /** What asking for a model `validModel` turns down says. */
@@ -330,7 +343,7 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
 
 /** What the table says about `provider`, when it's one (saved state and the wire can hold anything). */
 export function providerMeta(provider: unknown): ProviderMeta | undefined {
-  return isAgentProvider(provider) ? PROVIDER_META[provider] : undefined;
+  return typeof provider === 'string' ? PROVIDER_META[provider] : undefined;
 }
 
 /** Whether a model can be picked for a worker on `provider`. */

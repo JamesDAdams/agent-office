@@ -26,6 +26,7 @@ export interface ProjectInfo {
   remote?: string;
   agentCmd: string;
   defaultProvider: AgentProvider;
+  /** Providers this project can hire: the office's built-ins, plus any a plugin has registered. */
   agentProviders: AgentProvider[];
 }
 

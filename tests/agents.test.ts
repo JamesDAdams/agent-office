@@ -156,3 +156,22 @@ test('Claude models go by the name of the model, not only its family', () => {
   assert.equal(claudeModelName('gpt-5.5'), undefined);
   assert.equal(claudeModelName('<synthetic>'), undefined);
 });
+
+test('a plugin-registered agent provider becomes hirable', async () => {
+  const { registerAgentProvider, unregisterAgentProvider, getPluginProviders, getAllProviders, providerMeta } = await import('../src/shared/providers.js');
+  // Register a provider the way a plugin does.
+  registerAgentProvider('openfox', { label: 'OpenFox', name: 'OpenFox', bin: 'openfox', usage: { reports: true, note: 'OpenFox usage is tracked by the OpenFox server.' } });
+  try {
+    assert.ok(getPluginProviders().includes('openfox'));
+    assert.ok(getAllProviders().includes('openfox'));
+    assert.equal(providerMeta('openfox')?.label, 'OpenFox');
+    // The office's hirable provider list now includes it, whatever the configured agent is.
+    assert.ok(agentProviders('claude').includes('openfox'));
+    assert.ok(agentProviders('custom').includes('openfox'));
+    // And the built-ins are all still there.
+    for (const p of AGENT_PROVIDERS.filter((x) => x !== 'custom')) assert.ok(agentProviders('claude').includes(p));
+  } finally {
+    unregisterAgentProvider('openfox');
+  }
+  assert.ok(!getPluginProviders().includes('openfox'), 'unregistered again');
+});

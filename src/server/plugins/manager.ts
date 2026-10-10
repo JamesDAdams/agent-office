@@ -7,104 +7,13 @@ import type { Floor } from '../floor.js';
 import type { FloorInfo, GhIssue, GhPull, PluginManifest, PluginsState, ServiceInfo, WorkerInfo } from '../../shared/protocol.js';
 import type { Ctx } from '../office/context.js';
 import { PluginRegistry } from './registry.js';
-import type { AgentProviderPlugin, FloorProvider, IssuesAdapter, OfficePlugin, ProjectsProvider, PullsAdapter, QueueAdapter, ServicesProvider } from './types.js';
+import { candidatePluginDirs, candidatePluginFiles, detectEntryPath, parseGitUrl, getPluginDir, resolvePluginEntry, fetchLatestRelease } from './entry.js';
+import { pluginFilePath, pluginSettingsPagePath } from './plugin-files.js';
+import type { AgentProviderPlugin, FloorProvider, IssuesAdapter, OfficePlugin, ProjectConfig, ProjectsProvider, PullsAdapter, QueueAdapter, ServicesProvider } from './types.js';
 import type { AgentProvider } from '../../shared/providers.js';
 import { PROVIDER_META, registerAgentProvider, unregisterAgentProvider } from '../../shared/providers.js';
 import { registerAgentProviderAdapter, unregisterAgentProviderAdapter } from '../providers/index.js';
 
-const ENTRY_CANDIDATES = ['dist/index.js', 'index.js', 'plugin.js', 'dist/index.mjs', 'index.mjs'];
-
-function parseGitUrl(url: string): { id: string; cloneUrl: string } | null {
-  const trimmed = url.trim();
-  if (!trimmed) return null;
-  const ALLOWED_PROTOCOLS = ['https:', 'http:', 'git:', 'ssh:'];
-  try {
-    const parsedUrl = new URL(trimmed);
-    if (!ALLOWED_PROTOCOLS.includes(parsedUrl.protocol)) return null;
-  } catch {
-    if (!trimmed.includes('@') && !trimmed.startsWith('git://')) return null;
-  }
-
-  let cloneUrl = trimmed;
-  if (cloneUrl.startsWith('-')) return null;
-  if (cloneUrl.endsWith('/')) cloneUrl = cloneUrl.slice(0, -1);
-  if (!cloneUrl.endsWith('.git')) cloneUrl += '.git';
-  const match = /([^/]+?)(?:\.git)?$/.exec(cloneUrl);
-  if (!match) return null;
-  const id = match[1].toLowerCase().replace(/[^a-z0-9-_]/g, '-');
-  return { id, cloneUrl };
-}
-
-function getPluginDir(id: string, pluginsDir?: string): string {
-  return path.join(pluginsDir ?? path.join(process.cwd(), '.agent-office', 'plugins'), id);
-}
-
-function candidatePluginDirs(id: string, registryPluginsDir?: string): string[] {
-  return [path.join(process.cwd(), '.agent-office', 'plugins', id), registryPluginsDir ? path.join(registryPluginsDir, id) : null, path.resolve(process.cwd(), '..', 'agent-office-plugins', `agentoffice-${id}`), path.resolve(process.cwd(), '..', 'agent-office-plugins', `${id}-plugin-for-agent-office`), path.resolve(process.cwd(), '..', 'agent-office-plugins', `agent-office-plugin-${id}`), path.resolve(process.cwd(), '..', 'agent-office-plugins', id), path.resolve(process.cwd(), 'agent-office-plugins', `agentoffice-${id}`), path.resolve(process.cwd(), 'agent-office-plugins', `${id}-plugin-for-agent-office`), path.resolve(process.cwd(), 'agent-office-plugins', `agent-office-plugin-${id}`), path.resolve(process.cwd(), 'agent-office-plugins', id)].filter(Boolean) as string[];
-}
-
-function candidatePluginFiles(id: string, registryPluginsDir?: string): string[] {
-  return [path.join(process.cwd(), `${id}.js`), registryPluginsDir ? path.join(registryPluginsDir, `${id}.js`) : null, registryPluginsDir ? path.join(registryPluginsDir, `${id}.mjs`) : null].filter(Boolean) as string[];
-}
-
-function detectEntryPath(pluginDir: string): string | null {
-  for (const candidate of ENTRY_CANDIDATES) {
-    const p = path.join(pluginDir, candidate);
-    if (existsSync(p)) return p;
-  }
-  const pkgPath = path.join(pluginDir, 'package.json');
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { main?: string; module?: string };
-      const entry = pkg.main || pkg.module;
-      if (entry) {
-        const p = path.join(pluginDir, entry);
-        if (existsSync(p)) return p;
-      }
-    } catch {
-    }
-  }
-  return null;
-}
-
-function resolvePluginEntry(id: string, registryPluginsDir?: string, explicitEntry?: string): string | null {
-  if (explicitEntry) {
-    const resolved = path.isAbsolute(explicitEntry) ? explicitEntry : path.resolve(process.cwd(), explicitEntry);
-    if (existsSync(resolved)) return resolved;
-    if (registryPluginsDir) {
-      const inReg = path.resolve(registryPluginsDir, path.basename(explicitEntry));
-      if (existsSync(inReg)) return inReg;
-    }
-  }
-
-  for (const dir of candidatePluginDirs(id, registryPluginsDir)) {
-    if (existsSync(dir)) {
-      const entry = detectEntryPath(dir);
-      if (entry) return entry;
-    }
-  }
-
-  for (const file of candidatePluginFiles(id, registryPluginsDir)) {
-    if (existsSync(file)) return file;
-  }
-
-  return null;
-}
-
-async function fetchLatestRelease(githubUrl: string): Promise<string | null> {
-  try {
-    const match = /github\.com\/([^/]+)\/([^/]+)/.exec(githubUrl);
-    if (!match) return null;
-    const [, owner, repo] = match;
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
-    const res = await fetch(apiUrl, { headers: { Accept: 'application/vnd.github.v3+json' } });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { tag_name?: string };
-    return data.tag_name ?? null;
-  } catch {
-    return null;
-  }
-}
 
 export class PluginManager {
   private registry: PluginRegistry;
@@ -337,17 +246,34 @@ export class PluginManager {
         manifest.version = plugin.manifest.version ?? manifest.version;
         manifest.author = plugin.manifest.author ?? manifest.author;
         manifest.githubUrl = plugin.manifest.githubUrl ?? manifest.githubUrl;
+        manifest.settingsPage = plugin.manifest.settingsPage ?? manifest.settingsPage;
         this.plugins.set(manifest.id, plugin);
         if (plugin.manifest.id) {
           this.plugins.set(plugin.manifest.id, plugin);
-          const regItem = this.registry.get(plugin.manifest.id);
+          // The plugin may name itself differently from the id the office filed it under; the rest of
+          // the office (and Settings) addresses it by the name it gives itself.
+          const own = plugin.manifest.id;
+          const regItem = this.registry.get(own);
           if (regItem && regItem !== manifest) {
             regItem.status = 'active';
             regItem.installed = true;
+            (regItem as { entry?: string }).entry = (manifest as { entry?: string }).entry;
             regItem.version = plugin.manifest.version ?? regItem.version;
             regItem.author = plugin.manifest.author ?? regItem.author;
             regItem.githubUrl = plugin.manifest.githubUrl ?? regItem.githubUrl;
+            regItem.settingsPage = plugin.manifest.settingsPage ?? regItem.settingsPage;
+          } else if (!regItem) {
+            this.registry.register({
+              ...plugin.manifest,
+              installed: true,
+              status: 'active',
+              entry: (manifest as { entry?: string }).entry,
+              local: true,
+            } as PluginManifest);
           }
+          // The id it was filed under by its file name is not who it is now that the plugin has said:
+          // that placeholder goes, so Settings shows the plugin's own card and nothing beside it.
+          if (manifest.id !== own && manifest.local) this.registry.unregister(manifest.id);
         }
         await plugin.init?.(ctx);
         return plugin;
@@ -382,6 +308,8 @@ export class PluginManager {
           entry: envPlugin,
         } as any);
       }
+      // The plugin may name itself differently (its `manifest.id`); loadPlugin also registers that
+      // one, so Settings and the rest address it by the name it gives itself.
     }
 
     for (const manifest of this.registry.list()) {
@@ -390,7 +318,9 @@ export class PluginManager {
       }
     }
 
-    for (const plugin of this.plugins.values()) {
+    // One plugin can be filed under more than one id (its own, and the one the office knew it by);
+    // each plugin is registered once, whatever it is called here.
+    for (const plugin of new Set(this.plugins.values())) {
       if (plugin.agentProvider) {
         this.registerAgentProvider(plugin.agentProvider);
       }
@@ -420,6 +350,23 @@ export class PluginManager {
       }
     }
     this.plugins.clear();
+  }
+
+  /** Where a plugin's settings page is on disk, when it ships one (see plugin-files.ts). */
+  settingsPagePath(id: string): string | undefined {
+    const m = this.registry.get(id);
+    return m ? pluginSettingsPagePath(m, this.registry.pluginsDir) : undefined;
+  }
+
+  /** Where a file a plugin ships is, for serving it under /plugins/<id>/; never outside its directory. */
+  settingsPagePathOf(id: string, relative: string): string | undefined {
+    const m = this.registry.get(id);
+    return m ? pluginFilePath(m, this.registry.pluginsDir, relative) : undefined;
+  }
+
+  /** Whether the office has a loaded plugin by that id. */
+  has(id: string): boolean {
+    return this.plugins.has(id);
   }
 
   getFloorProvider(): FloorProvider | null {
@@ -517,11 +464,71 @@ export class PluginManager {
     return null;
   }
 
-  getProjectsProvider(): ProjectsProvider | null {
+  async startService(floor: Floor | undefined, serviceName?: string): Promise<boolean> {
+    const provider = this.getServicesProvider();
+    if (!provider?.startService || !floor) return false;
+    try {
+      await provider.startService(floor, serviceName);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async stopService(floor: Floor | undefined, serviceName?: string): Promise<boolean> {
+    const provider = this.getServicesProvider();
+    if (!provider?.stopService || !floor) return false;
+    try {
+      await provider.stopService(floor, serviceName);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async getServiceLogs(floor: Floor | undefined, serviceName?: string, lines?: number): Promise<string[]> {
+    const provider = this.getServicesProvider();
+    if (!provider?.getServiceLogs || !floor) return [];
+    try {
+      return (await provider.getServiceLogs(floor, serviceName, lines)) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  getProjectsProvider(floor?: Floor): ProjectsProvider | null {
     for (const p of this.plugins.values()) {
       if (p.projectsProvider) return p.projectsProvider;
     }
     return null;
+  }
+
+  /**
+   * The projects a plugin's provider lists for a floor, or null when no plugin has one there.
+   *
+   * A plugin can bring its own settings UI (see settingsPage) and this is how that page asks: the
+   * office holds the seam, the plugin holds the list.
+   */
+  async listPluginProjects(id: string, floor: Floor | undefined): Promise<ProjectConfig[] | null> {
+    const provider = floor && this.plugins.get(id)?.projectsProvider;
+    if (!provider || !floor) return null;
+    try {
+      return (await provider.listProjects?.(floor)) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Hands a floor's projects to the plugin that lists them; says whether one took them. */
+  async savePluginProjects(id: string, floor: Floor | undefined, projects: ProjectConfig[]): Promise<boolean> {
+    const provider = floor && this.plugins.get(id)?.projectsProvider;
+    if (!provider?.saveProjects || !floor) return false;
+    try {
+      await provider.saveProjects(floor, projects);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   getState(): PluginsState {
@@ -534,6 +541,8 @@ export class PluginManager {
         installed: true,
         version: plugin?.manifest?.version ?? m.version,
         author: plugin?.manifest?.author ?? m.author,
+        settingsPage: plugin?.manifest?.settingsPage ?? m.settingsPage,
+        agentProviderMeta: plugin?.agentProvider?.meta,
         status: (m.status === 'error' ? 'error' : active ? 'active' : 'inactive') as 'active' | 'inactive' | 'error',
       };
     });
@@ -543,6 +552,7 @@ export class PluginManager {
         ...m,
         version: plugin?.manifest?.version ?? m.version,
         author: plugin?.manifest?.author ?? m.author,
+        settingsPage: plugin?.manifest?.settingsPage ?? m.settingsPage,
         installed: false,
         status: 'inactive' as const,
       };

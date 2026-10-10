@@ -50,9 +50,12 @@ export function createPlugin() {
     const mgr = new PluginManager(tmpDir);
     await mgr.init({} as any);
     const state = mgr.getState();
-    const plugin = state.plugins.find((p) => p.id === 'mock-plugin');
-    assert.ok(plugin, `mock-plugin not found in ${JSON.stringify(state)}`);
+    // The plugin names itself in its manifest, so that is the id the office knows it by — the name of
+    // the file it was loaded from is not a second card in Settings.
+    const plugin = state.plugins.find((p) => p.id === 'mock-ext');
+    assert.ok(plugin, `mock-ext not found in ${JSON.stringify(state)}`);
     assert.equal(plugin?.status, 'active');
+    assert.equal(state.plugins.some((p) => p.id === 'mock-plugin'), false, 'the file name is not a plugin of its own');
     const fp = mgr.getFloorProvider();
     assert.ok(fp);
     const floors = await fp.listFloors();

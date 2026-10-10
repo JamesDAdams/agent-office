@@ -195,7 +195,7 @@ export async function openFloors(ctx: Ctx, hookPort: number): Promise<FloorsOpen
         const defs = await floorProvider.listFloors();
         if (defs && defs.length > 0) {
           const prevDefs = ctx.building.list();
-          ctx.building.setList(defs);
+          ctx.building.mergeList(defs);
           const currentDefs = ctx.building.list();
           if (JSON.stringify(prevDefs) !== JSON.stringify(currentDefs)) {
             for (const def of currentDefs) openFloor(def);

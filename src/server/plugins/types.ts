@@ -28,6 +28,9 @@ export interface QueueAdapter {
 
 export interface ServicesProvider {
   listServices(floor: Floor): Promise<ServiceInfo[]>;
+  startService?(floor: Floor, serviceName?: string): Promise<void>;
+  stopService?(floor: Floor, serviceName?: string): Promise<void>;
+  getServiceLogs?(floor: Floor, serviceName?: string, lines?: number): Promise<string[]>;
 }
 
 export interface AgentProviderPlugin {

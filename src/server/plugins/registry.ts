@@ -58,6 +58,11 @@ export class PluginRegistry {
     this.manifests.set(manifest.id, { ...manifest, installed: true });
   }
 
+  /** Forgets a manifest by id (a placeholder the loaded plugin made its own). */
+  unregister(id: string) {
+    this.manifests.delete(id);
+  }
+
   list(): PluginManifest[] {
     return [...this.manifests.values()];
   }

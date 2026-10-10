@@ -131,6 +131,18 @@ export class Claims {
   }
 }
 
+/**
+ * A list a plugin's adapter has for a floor's board, when it has taken the board over.
+ *
+ * A plugin that lists anything at all is the board for that project: it knows the issues and pull
+ * requests the office's own `gh` login can't see. One that has none leaves GitHub to answer, so a
+ * project the plugin doesn't cover still shows its own, and the board's Refresh keeps meaning
+ * something for everyone.
+ */
+export function adapterBoard<T>(listed: T[] | null | undefined): T[] | null {
+  return listed && listed.length ? listed : null;
+}
+
 export class GitHub {
   issues: GhState<GhIssue> = { items: [], fetchedAt: 0, loading: false };
   pulls: GhState<GhPull> = { items: [], fetchedAt: 0, loading: false };
@@ -459,7 +471,10 @@ export class GitHub {
     try {
       let fetched: GhIssue[] | null = null;
       if (this.customIssues) {
-        fetched = await this.customIssues();
+        // A plugin that lists any issues at all is the board for this project: it knows the issues
+        // the office's own `gh` login can't see. One that has none leaves GitHub to answer, so a
+        // project the plugin doesn't cover still shows its issues.
+        fetched = adapterBoard(await this.customIssues());
       }
       if (fetched === null) {
         // Open and closed separately, so old open issues are never crowded out by recent closed ones.
@@ -498,7 +513,7 @@ export class GitHub {
     try {
       let fetched: GhPull[] | null = null;
       if (this.customPulls) {
-        fetched = await this.customPulls();
+        fetched = adapterBoard(await this.customPulls());
       }
       if (fetched === null) {
         const fields = 'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,headRefOid,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';

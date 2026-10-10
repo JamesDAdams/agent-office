@@ -61,3 +61,7 @@
 .plugin-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 .plugin-actions .btn { font-size: 12px; padding: 4px 10px; }
 .plugin-error { margin: 0; font-size: 12px; font-weight: 700; color: #c62828; }
+
+/* A plugin's own settings page, served by the office from the plugin's directory. */
+.plugin-settings { margin-top: 6px; }
+.plugin-settings-frame { width: 100%; height: 420px; border: 2px solid var(--ink); border-radius: 10px; background: #fff; }
